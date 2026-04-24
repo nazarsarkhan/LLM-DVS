@@ -1,34 +1,88 @@
 # LLM-DVS — Parallel File Downloader
 
-A production-quality CLI file downloader written in Kotlin that fetches files in parallel chunks using HTTP Range requests, with work stealing, resume support, and real-time progress rendering.
+A CLI file downloader written in Kotlin that fetches files in parallel chunks using HTTP Range requests. Given a URL, it sends a HEAD request to discover file size, splits the file into N byte ranges, downloads each range concurrently, and assembles the pieces into a complete output file.
+
+## Task Requirements
+
+> *"Implement a file downloader which has the ability to download chunks of a file in parallel. You should collect the parts from a web server by specifying a URL."*
+
+| Requirement | Implementation |
+|-------------|----------------|
+| Download chunks in parallel | `FileDownloader` launches N coroutines on `Dispatchers.IO`, each fetching one byte range |
+| Specify a URL | First positional argument: `java -jar downloader.jar <url>` |
+| HEAD request → `Accept-Ranges` + `Content-Length` | `FileProber.probe()` — validates both headers before splitting |
+| GET with `Range: bytes=<start>-<end>` | `ChunkDownloader.downloadAttempt()` — one request per chunk |
+| Combine parts into a complete file | `ChunkAssembler.assemble()` — renames `.part` → output after all chunks finish |
+| Unit tests | 54 tests across 10 test files using `MockWebServer` |
+
+## How It Works
+
+```
+HEAD <url>  →  Content-Length, Accept-Ranges: bytes
+                        │
+              split into N byte ranges
+                        │
+        ┌───────────────┼───────────────┐
+        ▼               ▼               ▼
+GET Range:0-N    GET Range:N-2N   GET Range:2N-3N     (parallel)
+        │               │               │
+        └───────────────┴───────────────┘
+                        │
+              write into pre-allocated .part file
+                        │
+              rename .part → output file
+```
+
+Each chunk is written directly at its correct byte offset into a pre-allocated file, so no in-memory assembly is needed.
 
 ## Features
 
-- **Parallel chunk downloads** — splits files into N chunks, downloads them concurrently via `Dispatchers.IO`
-- **Work stealing** — a monitor coroutine detects stalled chunks and splits them into two halves, keeping idle workers busy until completion
-- **Adaptive chunk count** — automatically picks 1/4/8/16 chunks based on file size; override with `--chunks`
-- **Resume / partial download** — persists a `.manifest.json` after each chunk; restarting skips already-completed chunks
-- **Per-chunk retry with exponential backoff** — each chunk retries up to N times (1 s, 2 s, 4 s…)
-- **Graceful single-stream fallback** — if the server doesn't support `Accept-Ranges`, falls back to a regular GET
-- **Real-time ANSI progress** — per-chunk progress bars, total speed (MB/s), and ETA rendered in-place
-- **SHA-256 checksum verification** — optional `--checksum` flag validates file integrity after download
-- **Content-Disposition filename** — uses the server-suggested filename when `--output` is not specified
-- **Quiet mode** — `--quiet` suppresses all stdout for scripting; errors still go to stderr
+- **Parallel chunk downloads** — N concurrent `Range` GET requests via `Dispatchers.IO` coroutines
+- **Adaptive chunk count** — auto-selects 1/4/8/16 chunks based on file size; override with `--chunks`
+- **Work stealing** — monitor coroutine splits stalled chunks into halves, keeping idle workers busy
+- **Resume support** — persists a `.manifest.json` per chunk; interrupted downloads restart from where they left off
+- **Per-chunk retry with exponential backoff** — 1 s / 2 s / 4 s… up to `--retries` attempts
+- **Single-stream fallback** — if server doesn't return `Accept-Ranges: bytes`, falls back to a plain GET
+- **Real-time ANSI progress** — per-chunk progress bars with speed (MB/s) and ETA
+- **SHA-256 checksum verification** — `--checksum` validates integrity after download
+- **Content-Disposition filename** — uses server-suggested filename when `--output` is omitted
+- **Quiet mode** — `--quiet` suppresses all stdout; errors still go to stderr
 
-## Requirements
+## Quick Start
 
-- JDK 21+
-- Gradle 9+ (or use the included wrapper: `./gradlew`)
-
-## Build
+### 1 — Start a local web server
 
 ```bash
-# Run tests
-./gradlew test
+docker run --rm -p 8080:80 \
+  -v /path/to/your/local/directory:/usr/local/apache2/htdocs/ \
+  httpd:latest
+```
 
-# Build fat JAR (includes all dependencies)
+Files in that directory are now reachable at `http://localhost:8080/<filename>`.
+
+Verify the server returns the required headers:
+
+```bash
+curl -I http://localhost:8080/yourfile.bin
+# Expected:
+#   Accept-Ranges: bytes
+#   Content-Length: <size>
+```
+
+### 2 — Build the downloader
+
+```bash
 ./gradlew shadowJar
-# Output: build/libs/LLM-DVS-1.0.0-all.jar
+# Produces: build/libs/LLM-DVS-1.0.0-all.jar
+```
+
+### 3 — Download a file
+
+```bash
+java -jar build/libs/LLM-DVS-1.0.0-all.jar \
+  http://localhost:8080/yourfile.bin \
+  --output out.bin \
+  --chunks 8
 ```
 
 ## Usage
@@ -48,24 +102,46 @@ Options:
 ### Examples
 
 ```bash
-# Basic download
-java -jar LLM-DVS-1.0.0-all.jar https://example.com/file.bin
+# Basic — output filename derived from URL
+java -jar LLM-DVS-1.0.0-all.jar http://localhost:8080/file.bin
 
-# Explicit chunk count and output path
-java -jar LLM-DVS-1.0.0-all.jar https://example.com/large.bin --output large.bin --chunks 8
+# 8 parallel chunks with explicit output path
+java -jar LLM-DVS-1.0.0-all.jar http://localhost:8080/large.bin --output large.bin --chunks 8
 
-# With integrity check
-java -jar LLM-DVS-1.0.0-all.jar https://example.com/file.bin --checksum a3f1...
+# Integrity check (SHA-256)
+java -jar LLM-DVS-1.0.0-all.jar http://localhost:8080/file.bin \
+  --checksum $(sha256sum /path/to/local/file.bin | cut -d' ' -f1)
 
 # Resume an interrupted download — just rerun the same command
-java -jar LLM-DVS-1.0.0-all.jar https://example.com/file.bin --output file.bin --chunks 8
+java -jar LLM-DVS-1.0.0-all.jar http://localhost:8080/file.bin --output file.bin --chunks 8
 
-# Custom timeout (useful for slow servers)
-java -jar LLM-DVS-1.0.0-all.jar https://example.com/slow.bin --timeout 120
+# Custom timeout for slow servers
+java -jar LLM-DVS-1.0.0-all.jar http://localhost:8080/slow.bin --timeout 120
 
 # Quiet mode for scripting
-java -jar LLM-DVS-1.0.0-all.jar https://example.com/file.bin --quiet && echo "done"
+java -jar LLM-DVS-1.0.0-all.jar http://localhost:8080/file.bin --quiet && echo "done"
 ```
+
+## Running the Tests
+
+```bash
+./gradlew test
+```
+
+All tests use `MockWebServer` — no live server or Docker needed. The suite covers:
+
+| Test file | What it verifies |
+|-----------|-----------------|
+| `FileProberTest` | HEAD parsing, missing headers, non-2xx responses, Content-Disposition extraction |
+| `ChunkDownloaderTest` | 206 happy path, non-206 error messages, Content-Range validation, retry/backoff |
+| `FileDownloaderTest` | Full parallel download, resume, single-stream fallback, checksum verification |
+| `WorkStealingTest` | Slow-chunk detection, sub-chunk splitting, outstanding count correctness |
+| `ManifestManagerTest` | Save/load/mark-done cycle, stale manifest detection |
+| `ChunkAssemblerTest` | Part rename, manifest cleanup |
+| `ChecksumVerifierTest` | Match, mismatch, missing file |
+| `ChunkMathTest` | Adaptive count table, byte range boundaries |
+| `ProgressRendererTest` | Channel consumption, render output format |
+| `CliArgsTest` | All flags, defaults, error cases |
 
 ## Exit Codes
 
@@ -78,6 +154,8 @@ java -jar LLM-DVS-1.0.0-all.jar https://example.com/file.bin --quiet && echo "do
 
 ## Adaptive Chunk Count
 
+When `--chunks` is not specified, the count is chosen by file size:
+
 | File size   | Chunks |
 |-------------|--------|
 | < 1 MB      | 1      |
@@ -88,34 +166,28 @@ java -jar LLM-DVS-1.0.0-all.jar https://example.com/file.bin --quiet && echo "do
 ## Architecture
 
 ```
-URL
+FileProber          HEAD <url> → Content-Length, Accept-Ranges, Content-Disposition
  │
- ▼
-FileProber          HEAD request → ContentLength, Accept-Ranges, Content-Disposition
+FileDownloader      Splits file into chunks, orchestrates workers, manages resume state
+ ├── ManifestManager     Persists completed chunk indices to <output>.manifest.json
+ ├── WorkQueue           Channel-backed queue shared across the worker pool
+ ├── Worker pool         N coroutines on Dispatchers.IO
+ │    └── ChunkDownloader    GET with Range header → streams bytes into RandomAccessFile at correct offset
+ ├── WorkStealingMonitor Detects stalled chunks; cancels and re-enqueues as two halves
+ └── ProgressRenderer    Drains ChunkProgress channel; redraws ANSI bars on Dispatchers.Default
  │
- ▼
-FileDownloader      Orchestrator: resolves output path, manages manifest, launches coroutines
- ├── ManifestManager     Persists chunk completion state to <output>.manifest.json
- ├── WorkQueue           Channel-backed queue shared by the worker pool
- ├── Worker pool         N coroutines on Dispatchers.IO, each pulling chunks from WorkQueue
- │    └── ChunkDownloader    Sends Range request, streams bytes into RandomAccessFile, retries on failure
- ├── WorkStealingMonitor Polls active chunks; splits slow ones into two sub-chunks
- └── ProgressRenderer    Consumes ChunkProgress events; redraws ANSI bars on Dispatchers.Default
- │
- ▼
 ChunkAssembler      Renames <output>.part → <output>, deletes manifest
  │
- ▼
-ChecksumVerifier    Optional SHA-256 validation
+ChecksumVerifier    Optional SHA-256 check
 ```
 
 ## Resume Logic
 
-On each chunk completion the downloader writes a `<output>.manifest.json` file alongside the `.part` file. On restart:
+A `<output>.manifest.json` is written alongside `<output>.part` and updated after each chunk completes. On restart:
 
-1. If the manifest matches the URL, file size, and chunk count → resumes, skipping done chunks.
-2. If the manifest is stale (URL or parameters changed) → restarts from scratch.
-3. On success → both `.part` and `.manifest.json` are deleted.
+1. Manifest matches URL + file size + chunk count → skip completed chunks, fetch the rest.
+2. Manifest is stale → restart from scratch.
+3. Download succeeds → both `.part` and `.manifest.json` are deleted.
 
 ## Project Structure
 
@@ -155,27 +227,5 @@ src/
 | `okhttp3` | 4.12.0 | HTTP client + Range requests |
 | `kotlinx-coroutines-core` | 1.8.1 | Parallel chunk downloads |
 | `kotlinx-serialization-json` | 1.6.3 | Manifest serialization |
-| `mockwebserver` | 4.12.0 | Test HTTP server |
+| `mockwebserver` | 4.12.0 | In-process HTTP server for tests |
 | `junit-jupiter` | 5.10.3 | Test framework |
-
-## Manual End-to-End Test
-
-```bash
-# Serve a local file
-docker run --rm -p 8080:80 -v /path/to/dir:/usr/local/apache2/htdocs/ httpd:latest
-
-# Download with 8 chunks
-java -jar build/libs/LLM-DVS-1.0.0-all.jar http://localhost:8080/largefile.bin \
-     --output out.bin --chunks 8
-
-# Resume test: kill mid-download (Ctrl+C), rerun same command
-# → only missing chunks are fetched
-
-# Checksum test
-java -jar build/libs/LLM-DVS-1.0.0-all.jar http://localhost:8080/file.bin \
-     --checksum $(sha256sum /path/to/dir/file.bin | cut -d' ' -f1)
-
-# Quiet mode (no stdout)
-java -jar build/libs/LLM-DVS-1.0.0-all.jar http://localhost:8080/file.bin --quiet
-echo "Exit code: $?"
-```
