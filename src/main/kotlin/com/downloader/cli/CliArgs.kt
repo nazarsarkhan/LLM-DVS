@@ -12,7 +12,7 @@ private fun usage(testMode: Boolean): Nothing {
         Usage: downloader <url> [options]
 
         Options:
-          --output <file>       Output file path (default: derived from URL)
+          --output <file>       Output file path (default: derived from URL or Content-Disposition)
           --chunks <N>          Number of parallel chunks (default: adaptive)
           --retries <N>         Max retries per chunk (default: 3)
           --checksum <sha256>   Expected SHA-256 hex to verify after download
@@ -80,6 +80,7 @@ fun parseArgs(args: Array<String>, testMode: Boolean = false): ParsedArgs {
             connectTimeoutSec = timeout ?: 30,
             readTimeoutSec    = timeout ?: 60,
             quiet             = quiet,
+            outputExplicit    = output != null,
         )
     )
 }

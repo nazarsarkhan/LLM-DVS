@@ -9,4 +9,5 @@ data class DownloadConfig(
     val connectTimeoutSec: Int = 30,
     val readTimeoutSec: Int = 60,
     val quiet: Boolean = false,
+    val outputExplicit: Boolean = false, // true when --output was provided by the user
 )

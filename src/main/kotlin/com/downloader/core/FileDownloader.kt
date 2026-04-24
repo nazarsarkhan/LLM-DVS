@@ -41,9 +41,12 @@ class FileDownloader(
         val caps = prober.probe(config.url)
         if (!config.quiet) println("File size: ${formatBytes(caps.contentLength)}  Accepts-Ranges: ${caps.acceptsRanges}")
 
+        // Resolve output path: prefer Content-Disposition filename when user didn't specify --output
+        val outputPath = if (!config.outputExplicit && caps.fileName != null) caps.fileName else config.outputFile
+
         if (!caps.acceptsRanges) {
             if (!config.quiet) println("Server does not support range requests — falling back to single stream.")
-            fallbackSingleStream(caps.contentLength)
+            fallbackSingleStream(caps.contentLength, outputPath)
             return
         }
 
@@ -51,9 +54,9 @@ class FileDownloader(
         val chunkCount  = config.chunkCount ?: computeChunkCount(totalBytes)
         val allChunks   = computeChunks(totalBytes, chunkCount)
 
-        val outputFile   = File(config.outputFile)
-        val partFile     = File("${config.outputFile}.part")
-        val manifestFile = File("${config.outputFile}.manifest.json")
+        val outputFile   = File(outputPath)
+        val partFile     = File("$outputPath.part")
+        val manifestFile = File("$outputPath.manifest.json")
         val manifestMgr  = ManifestManager(manifestFile)
 
         // Resume logic
@@ -267,8 +270,8 @@ class FileDownloader(
         monitorJob.cancel()
     }
 
-    private fun fallbackSingleStream(expectedBytes: Long) {
-        val outputFile = File(config.outputFile)
+    private fun fallbackSingleStream(expectedBytes: Long, outputPath: String) {
+        val outputFile = File(outputPath)
         val request = Request.Builder().url(config.url).build()
         client.newCall(request).execute().use { resp ->
             if (!resp.isSuccessful) throw java.io.IOException("HTTP ${resp.code}")
