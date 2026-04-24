@@ -55,7 +55,15 @@ class ChunkDownloader(private val client: OkHttpClient) {
         val response = client.newCall(request).execute()
         response.use { resp ->
             if (resp.code != 206) {
-                throw IOException("Expected 206 Partial Content, got ${resp.code} for chunk ${chunk.index}")
+                val hint = when (resp.code) {
+                    401 -> "Unauthorized — check credentials"
+                    403 -> "Forbidden — access denied"
+                    404 -> "Not Found — URL may be wrong"
+                    429 -> "Rate limited — try increasing --timeout or reducing --chunks"
+                    500, 502, 503 -> "Server error (${resp.code}) — retry later"
+                    else -> "unexpected status"
+                }
+                throw IOException("HTTP ${resp.code} ($hint) on chunk ${chunk.index} [${chunk.startByte}-${chunk.endByte}]")
             }
             // RFC 7233: 206 MUST include Content-Range; validate it matches the requested range
             val contentRange = resp.header("Content-Range")
