@@ -39,10 +39,10 @@ class FileDownloader(
 
     suspend fun download() {
         val caps = prober.probe(config.url)
-        println("File size: ${formatBytes(caps.contentLength)}  Accepts-Ranges: ${caps.acceptsRanges}")
+        if (!config.quiet) println("File size: ${formatBytes(caps.contentLength)}  Accepts-Ranges: ${caps.acceptsRanges}")
 
         if (!caps.acceptsRanges) {
-            println("Server does not support range requests — falling back to single stream.")
+            if (!config.quiet) println("Server does not support range requests — falling back to single stream.")
             fallbackSingleStream(caps.contentLength)
             return
         }
@@ -64,10 +64,10 @@ class FileDownloader(
                 && existing.totalBytes == totalBytes
                 && existing.chunkCount == chunkCount
             ) {
-                println("Resuming download: ${existing.doneChunks.size}/$chunkCount chunks already done.")
+                if (!config.quiet) println("Resuming download: ${existing.doneChunks.size}/$chunkCount chunks already done.")
                 existing
             } else {
-                if (existing != null) println("Stale manifest detected — restarting download.")
+                if (existing != null && !config.quiet) println("Stale manifest detected — restarting download.")
                 DownloadManifest(
                     url        = config.url,
                     totalBytes = totalBytes,
@@ -81,14 +81,18 @@ class FileDownloader(
         RandomAccessFile(partFile, "rw").use { it.setLength(totalBytes) }
 
         val pendingChunks = allChunks.filter { it.index !in manifest.doneChunks }
-        println("Downloading $chunkCount chunks (${pendingChunks.size} pending)…\n")
+        if (!config.quiet) println("Downloading $chunkCount chunks (${pendingChunks.size} pending)…\n")
 
         val progressChannel = Channel<ChunkProgress>(Channel.BUFFERED)
         val renderer        = ProgressRenderer(totalBytes)
 
         coroutineScope {
             val renderJob = launch(Dispatchers.Default) {
-                renderer.render(progressChannel)
+                if (config.quiet) {
+                    for (p in progressChannel) { /* discard */ }
+                } else {
+                    renderer.render(progressChannel)
+                }
             }
 
             RandomAccessFile(partFile, "rw").use { raf ->
@@ -107,12 +111,12 @@ class FileDownloader(
         }
 
         assembler.assemble(partFile, outputFile, manifestFile)
-        println("Download complete → ${outputFile.absolutePath}")
+        if (!config.quiet) println("Download complete → ${outputFile.absolutePath}")
 
         config.checksum?.let {
-            print("Verifying SHA-256 checksum… ")
+            if (!config.quiet) print("Verifying SHA-256 checksum… ")
             checksumVerifier.verify(outputFile, it)
-            println("OK")
+            if (!config.quiet) println("OK")
         }
     }
 
@@ -279,15 +283,15 @@ class FileDownloader(
                         output.write(buf, 0, n)
                         total += n
                     }
-                    println("Downloaded ${formatBytes(total)}")
+                    if (!config.quiet) println("Downloaded ${formatBytes(total)}")
                 }
             }
         }
-        println("Download complete → ${outputFile.absolutePath}")
+        if (!config.quiet) println("Download complete → ${outputFile.absolutePath}")
         config.checksum?.let {
-            print("Verifying SHA-256 checksum… ")
+            if (!config.quiet) print("Verifying SHA-256 checksum… ")
             checksumVerifier.verify(outputFile, it)
-            println("OK")
+            if (!config.quiet) println("OK")
         }
     }
 

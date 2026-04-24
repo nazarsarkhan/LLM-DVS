@@ -17,6 +17,7 @@ private fun usage(testMode: Boolean): Nothing {
           --retries <N>         Max retries per chunk (default: 3)
           --checksum <sha256>   Expected SHA-256 hex to verify after download
           --timeout <N>         Connect and read timeout in seconds (default: 30/60)
+          --quiet               Suppress all stdout output (errors still go to stderr)
 
         Examples:
           downloader https://example.com/file.bin
@@ -44,6 +45,7 @@ fun parseArgs(args: Array<String>, testMode: Boolean = false): ParsedArgs {
     var retries = 3
     var checksum: String? = null
     var timeout: Int? = null
+    var quiet = false
 
     var i = 1
     while (i < args.size) {
@@ -53,6 +55,7 @@ fun parseArgs(args: Array<String>, testMode: Boolean = false): ParsedArgs {
             "--retries"  -> { retries  = args.getOrNull(++i)?.toIntOrNull() ?: usage(testMode) }
             "--checksum" -> { checksum = args.getOrNull(++i) ?: usage(testMode) }
             "--timeout"  -> { timeout  = args.getOrNull(++i)?.toIntOrNull() ?: usage(testMode) }
+            "--quiet"    -> { quiet = true }
             else -> {
                 if (testMode) throw IllegalArgumentException("Unknown option: ${args[i]}")
                 System.err.println("Unknown option: ${args[i]}")
@@ -76,6 +79,7 @@ fun parseArgs(args: Array<String>, testMode: Boolean = false): ParsedArgs {
             checksum          = checksum,
             connectTimeoutSec = timeout ?: 30,
             readTimeoutSec    = timeout ?: 60,
+            quiet             = quiet,
         )
     )
 }

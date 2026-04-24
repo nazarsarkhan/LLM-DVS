@@ -8,4 +8,5 @@ data class DownloadConfig(
     val checksum: String? = null,
     val connectTimeoutSec: Int = 30,
     val readTimeoutSec: Int = 60,
+    val quiet: Boolean = false,
 )

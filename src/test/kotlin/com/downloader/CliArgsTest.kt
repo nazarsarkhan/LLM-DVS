@@ -66,6 +66,18 @@ class CliArgsTest {
         assertEquals(60, result.config.readTimeoutSec)
     }
 
+    @Test
+    fun `--quiet flag sets quiet to true`() {
+        val result = parse("https://example.com/f.bin", "--quiet")
+        assertEquals(true, result.config.quiet)
+    }
+
+    @Test
+    fun `quiet defaults to false`() {
+        val result = parse("https://example.com/f.bin")
+        assertEquals(false, result.config.quiet)
+    }
+
     // ── Error cases ──────────────────────────────────────────────────────────
 
     @Test
